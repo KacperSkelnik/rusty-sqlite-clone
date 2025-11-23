@@ -100,14 +100,12 @@ impl<'a> Tokenizer<'a> {
 
                 '\'' => {
                     start_offset += 1; // skip the first quote
-                    while let Some(&next_sub_char) = self.source_chars.peek() {
+                    while let Some(next_sub_char) = self.source_chars.next() {
                         if next_sub_char == '\'' {
                             let literal = &self.source_text[start_offset..self.offset];
-                            self.source_chars.next(); // consume the closing quote
                             self.offset += 1;
                             return Some(Token::StringLiteral(literal));
                         } else {
-                            self.source_chars.next();
                             self.offset += 1;
                             continue;
                         }
