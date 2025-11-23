@@ -209,6 +209,15 @@ mod tests {
     }
 
     #[test]
+    fn test_numeric_literal() {
+        let sql = "SELECT 123.123;";
+        let tokens: Vec<Token> = Tokenizer::new(sql).collect();
+        assert_eq!(tokens[0], Token::Select);
+        assert_eq!(tokens[1], Token::NumericLiteral("123.123"));
+        assert_eq!(tokens[2], Token::Semicolon);
+    }
+
+    #[test]
     fn test_no_alloc() {
         struct CountingAllocator;
 
@@ -235,14 +244,5 @@ mod tests {
         let after = ALLOCATION_COUNT.load(std::sync::atomic::Ordering::SeqCst);
 
         assert_eq!(before, after);
-    }
-
-    #[test]
-    fn test_numeric_literal() {
-        let sql = "SELECT 123.123;";
-        let tokens: Vec<Token> = Tokenizer::new(sql).collect();
-        assert_eq!(tokens[0], Token::Select);
-        assert_eq!(tokens[1], Token::NumericLiteral("123.123"));
-        assert_eq!(tokens[2], Token::Semicolon);
     }
 }
