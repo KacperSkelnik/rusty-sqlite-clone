@@ -12,6 +12,9 @@ pub enum Token<'a> {
     // Keyword
     Create,
     Table,
+    Insert,
+    Into,
+    Values,
     Select,
     From,
     Where,
@@ -43,6 +46,9 @@ fn identify_keyword_or_identifier<'a>(literal: &'a str) -> Token<'a> {
             "WHERE" => Token::Where,
             "AND" => Token::And,
             "OR" => Token::Or,
+            "INSERT" => Token::Insert,
+            "INTO" => Token::Into,
+            "VALUES" => Token::Values,
             _ => Token::Identifier(literal),
         },
         Err(_) => Token::Identifier(literal),
@@ -213,6 +219,22 @@ mod tests {
         assert_eq!(tokens[0], Token::Select);
         assert_eq!(tokens[1], Token::NumericLiteral("123.123"));
         assert_eq!(tokens[2], Token::Semicolon);
+    }
+
+    #[test]
+    fn test_insert_statement() {
+        let sql = "INSERT INTO users VALUES ('John', 25);";
+        let tokens: Vec<Token> = Tokenizer::new(sql).collect();
+        assert_eq!(tokens[0], Token::Insert);
+        assert_eq!(tokens[1], Token::Into);
+        assert_eq!(tokens[2], Token::Identifier("users"));
+        assert_eq!(tokens[3], Token::Values);
+        assert_eq!(tokens[4], Token::LP);
+        assert_eq!(tokens[5], Token::StringLiteral("John"));
+        assert_eq!(tokens[6], Token::Comma);
+        assert_eq!(tokens[7], Token::NumericLiteral("25"));
+        assert_eq!(tokens[8], Token::RP);
+        assert_eq!(tokens[9], Token::Semicolon);
     }
 
     #[test]
