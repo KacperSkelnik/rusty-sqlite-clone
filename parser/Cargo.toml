@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 tokenizer = { path = "../tokenizer" }
+log = "0.4.28"

@@ -89,6 +89,9 @@ impl<'a> Tokenizer<'a> {
                             return Some(identify_keyword_or_identifier(literal));
                         }
                     }
+                    // we reached the end of the input without finding a terminating character
+                    let literal = &self.source_text[start_offset..];
+                    return Some(identify_keyword_or_identifier(literal));
                 }
 
                 c if c.is_numeric() => {
@@ -102,6 +105,9 @@ impl<'a> Tokenizer<'a> {
                             return Some(Token::NumericLiteral(literal));
                         }
                     }
+                    // we reached the end of the input without finding a terminating character
+                    let literal = &self.source_text[start_offset..];
+                    return Some(Token::NumericLiteral(literal));
                 }
 
                 '\'' => {
@@ -235,6 +241,21 @@ mod tests {
         assert_eq!(tokens[7], Token::NumericLiteral("25"));
         assert_eq!(tokens[8], Token::RP);
         assert_eq!(tokens[9], Token::Semicolon);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let sql = "";
+        let tokens: Vec<Token> = Tokenizer::new(sql).collect();
+        assert_eq!(tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_incomplete_input() {
+        let sql = "CREATE TABLE";
+        let tokens: Vec<Token> = Tokenizer::new(sql).collect();
+        assert_eq!(tokens[0], Token::Create);
+        assert_eq!(tokens[1], Token::Table);
     }
 
     #[test]
