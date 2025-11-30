@@ -1,5 +1,6 @@
 use crate::ParsingError::{
     InvalidStatement, MissingKeyword, MissingStringLiteral, StringLiteralExpected, UnexpectedEOF, UnexpectedKeyword,
+    UnexpectedKeywordMany,
 };
 use crate::Statement::CreateTable;
 use tokenizer::{Token, Tokenizer};
@@ -102,20 +103,26 @@ impl Parser {
 
         let mut columns: Vec<ColumnDef> = Vec::new();
         parse_column_def(&mut columns, &mut tokens)?;
-        loop {
-            if let Some(next) = tokens.next() {
-                match next {
-                    Token::RP => {
-                        if columns.is_empty() {
-                            return Err(UnexpectedEOF);
-                        } else {
-                            break;
-                        }
+        while let Some(next) = tokens.next() {
+            match next {
+                Token::RP => {
+                    if columns.is_empty() {
+                        return Err(UnexpectedEOF);
+                    } else {
+                        break;
                     }
-                    Token::Comma => parse_column_def(&mut columns, &mut tokens)?,
-                    _ => return Err(UnexpectedEOF),
                 }
+                Token::Comma => parse_column_def(&mut columns, &mut tokens)?,
+                _ => return Err(UnexpectedKeywordMany { expected: vec![Token::RP, Token::Comma], actual: next }),
             }
+        }
+
+        if let Some(last_token) = tokens.next() {
+            if last_token != Token::Semicolon {
+                return Err(UnexpectedKeyword { actual: last_token, expected: Token::Semicolon });
+            }
+        } else {
+            return Err(UnexpectedEOF);
         }
 
         Ok(CreateTable { columns, table })
@@ -170,5 +177,12 @@ mod tests {
         let parser = Parser {};
         let result = parser.parse("CREATE TABLE");
         assert_eq!(result, Err(MissingStringLiteral));
+    }
+
+    #[test]
+    fn test_missing_closing_parenthesis() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users (id INT");
+        assert_eq!(result, Err(UnexpectedEOF));
     }
 }
