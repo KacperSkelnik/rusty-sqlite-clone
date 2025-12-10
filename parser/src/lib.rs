@@ -1,18 +1,16 @@
 use crate::ParsingError::{
-    InvalidStatement, MissingKeyword, MissingStringLiteral, StringLiteralExpected, UnexpectedEOF, UnexpectedKeyword,
-    UnexpectedKeywordMany,
+    InvalidStatement, LiteralExpected, MissingKeyword, UnexpectedEOF, UnexpectedKeyword, UnexpectedKeywordMany,
 };
 use crate::Statement::CreateTable;
-use tokenizer::{Token, Tokenizer};
+use tokenizer::{Token, TokenPosition, TokenWithOffset, Tokenizer};
 
 #[derive(Debug, PartialEq)]
 pub enum ParsingError<'a> {
     InvalidStatement(Token<'a>),
-    UnexpectedKeyword { expected: Token<'a>, actual: Token<'a> },
-    UnexpectedKeywordMany { expected: Vec<Token<'a>>, actual: Token<'a> },
-    MissingKeyword { expected: Token<'a> },
-    StringLiteralExpected { actual: Token<'a> },
-    MissingStringLiteral,
+    UnexpectedKeyword { expected: Token<'a>, position: TokenPosition },
+    UnexpectedKeywordMany { expected: Vec<Token<'a>>, position: TokenPosition },
+    MissingKeyword { expected: Token<'a>, position: TokenPosition },
+    LiteralExpected { position: TokenPosition },
     UnexpectedError,
     UnexpectedEOF,
 }
@@ -48,11 +46,11 @@ impl Parser {
     pub fn parse<'a>(&self, sql: &'a str) -> Result<Statement<'a>, ParsingError<'a>> {
         let mut tokens = Tokenizer::new(sql);
 
-        if let Some(token) = tokens.next() {
-            match token {
+        if let Some(token_with_offset) = tokens.next() {
+            match token_with_offset.token {
                 Token::Create => Self.parse_create_statement(tokens),
-                //Token::Select => Self.parse_select_statement(tokens),
-                //Token::Insert => Self.parse_insert_statement(tokens),
+                Token::Select => Self.parse_select_statement(tokens),
+                Token::Insert => Self.parse_insert_statement(tokens),
                 other => Err(InvalidStatement(other)),
             }
         } else {
@@ -63,77 +61,80 @@ impl Parser {
     fn parse_create_statement<'a>(&self, mut tokens: Tokenizer<'a>) -> Result<Statement<'a>, ParsingError<'a>> {
         // Expect "TABLE" keyword
         match tokens.next() {
-            Some(Token::Table) => (),
-            Some(other) => return Err(UnexpectedKeyword { expected: Token::Table, actual: other }),
-            None => return Err(MissingKeyword { expected: Token::Table }),
+            Some(TokenWithOffset { token: Token::Table, offset: _ }) => (),
+            Some(other) => {
+                return Err(MissingKeyword { expected: Token::Table, position: tokens.get_position(other.offset) })
+            }
+            None => return Err(UnexpectedEOF),
         }
 
         // Parse table name
         let table = match tokens.next() {
-            Some(Token::Identifier(name)) => name,
-            Some(other) => return Err(StringLiteralExpected { actual: other }),
-            None => return Err(MissingStringLiteral),
+            Some(TokenWithOffset { token: Token::Identifier(name), offset: _ }) => name,
+            Some(other) => return Err(LiteralExpected { position: tokens.get_position(other.offset) }),
+            None => return Err(UnexpectedEOF),
         };
 
-        // Expect opening parenthesis
+        // Expect "("
         match tokens.next() {
-            Some(Token::LP) => (),
-            Some(other) => return Err(UnexpectedKeyword { expected: Token::LP, actual: other }),
-            None => return Err(MissingKeyword { expected: Token::LP }),
+            Some(TokenWithOffset { token: Token::LP, offset: _ }) => (),
+            Some(other) => {
+                return Err(MissingKeyword { expected: Token::LP, position: tokens.get_position(other.offset) })
+            }
+            None => return Err(UnexpectedEOF),
         }
 
-        // Parse column list
-        fn parse_column_def<'a>(
-            columns_ref: &mut Vec<ColumnDef<'a>>,
-            tokens_ref: &mut Tokenizer<'a>,
-        ) -> Result<(), ParsingError<'a>> {
+        // Parse column definitions
+        fn parse_column_def<'a>(tokens_ref: &mut Tokenizer<'a>) -> Result<ColumnDef<'a>, ParsingError<'a>> {
             let name = match tokens_ref.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(StringLiteralExpected { actual: other }),
-                None => return Err(MissingStringLiteral),
+                Some(TokenWithOffset { token: Token::Identifier(name), offset: _ }) => name,
+                Some(other) => return Err(LiteralExpected { position: tokens_ref.get_position(other.offset) }),
+                None => return Err(UnexpectedEOF),
             };
             let data_type = match tokens_ref.next() {
-                Some(Token::Identifier(data_type)) => data_type,
-                Some(other) => return Err(StringLiteralExpected { actual: other }),
-                None => return Err(MissingStringLiteral),
+                Some(TokenWithOffset { token: Token::Identifier(data_type), offset: _ }) => data_type,
+                Some(other) => return Err(LiteralExpected { position: tokens_ref.get_position(other.offset) }),
+                None => return Err(UnexpectedEOF),
             };
-            columns_ref.push(ColumnDef { name, data_type });
-            Ok(())
+            Ok(ColumnDef { name, data_type })
         }
 
         let mut columns: Vec<ColumnDef> = Vec::new();
-        parse_column_def(&mut columns, &mut tokens)?;
-        while let Some(next) = tokens.next() {
+        let first_column = parse_column_def(&mut tokens)?;
+        columns.push(first_column);
+
+        while let next = tokens.next() {
             match next {
-                Token::RP => {
+                Some(TokenWithOffset { token: Token::RP, offset: _ }) => {
                     if columns.is_empty() {
                         return Err(UnexpectedEOF);
                     } else {
                         break;
                     }
                 }
-                Token::Comma => parse_column_def(&mut columns, &mut tokens)?,
-                _ => return Err(UnexpectedKeywordMany { expected: vec![Token::RP, Token::Comma], actual: next }),
+                Some(TokenWithOffset { token: Token::Comma, offset: _ }) => {
+                    let next_column = parse_column_def(&mut tokens)?;
+                    columns.push(next_column);
+                }
+                Some(other) => {
+                    return Err(UnexpectedKeywordMany {
+                        expected: vec![Token::RP, Token::Comma],
+                        position: tokens.get_position(other.offset),
+                    })
+                }
+                None => return Err(UnexpectedEOF),
             }
-        }
-
-        if let Some(last_token) = tokens.next() {
-            if last_token != Token::Semicolon {
-                return Err(UnexpectedKeyword { actual: last_token, expected: Token::Semicolon });
-            }
-        } else {
-            return Err(UnexpectedEOF);
         }
 
         Ok(CreateTable { columns, table })
     }
 
-    fn parse_select_statement<'a>(&self, mut tokens: Tokenizer<'a>) -> Result<(), ParsingError<'a>> {
-        Ok(())
+    fn parse_select_statement<'a>(&self, mut tokens: Tokenizer<'a>) -> Result<Statement<'a>, ParsingError<'a>> {
+        todo!()
     }
 
-    fn parse_insert_statement<'a>(&self, mut tokens: Tokenizer<'a>) -> Result<(), ParsingError<'a>> {
-        Ok(())
+    fn parse_insert_statement<'a>(&self, mut tokens: Tokenizer<'a>) -> Result<Statement<'a>, ParsingError<'a>> {
+        todo!()
     }
 }
 
@@ -176,7 +177,7 @@ mod tests {
     fn test_missing_table_name() {
         let parser = Parser {};
         let result = parser.parse("CREATE TABLE");
-        assert_eq!(result, Err(MissingStringLiteral));
+        assert_eq!(result, Err(UnexpectedEOF));
     }
 
     #[test]
@@ -184,5 +185,18 @@ mod tests {
         let parser = Parser {};
         let result = parser.parse("CREATE TABLE users (id INT");
         assert_eq!(result, Err(UnexpectedEOF));
+    }
+
+    #[test]
+    fn test_unexpected_definition_separator() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users (id TEXT; name TEXT; age INT)");
+        assert_eq!(
+            result,
+            Err(UnexpectedKeywordMany {
+                expected: vec![Token::RP, Token::Comma],
+                position: TokenPosition { line: 1, character: 27 }
+            })
+        );
     }
 }
