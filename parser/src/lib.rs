@@ -1,6 +1,4 @@
-use crate::ParsingError::{
-    InvalidStatement, LiteralExpected, MissingKeyword, UnexpectedEOF, UnexpectedKeyword, UnexpectedKeywordMany,
-};
+use crate::ParsingError::{InvalidStatement, LiteralExpected, MissingKeyword, UnexpectedEOF, UnexpectedKeywordMany};
 use crate::Statement::CreateTable;
 use tokenizer::{Token, TokenPosition, TokenWithOffset, Tokenizer};
 
@@ -160,6 +158,16 @@ mod tests {
     }
 
     #[test]
+    fn test_create_table_single_column() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users (id INT)");
+        assert_eq!(
+            result,
+            Ok(CreateTable { columns: vec![ColumnDef { name: "id", data_type: "INT" }], table: "users" })
+        );
+    }
+
+    #[test]
     fn test_empty_input() {
         let parser = Parser {};
         let result = parser.parse("");
@@ -198,5 +206,29 @@ mod tests {
                 position: TokenPosition { line: 1, character: 27 }
             })
         );
+    }
+
+    #[test]
+    fn test_missing_opening_parenthesis() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users id INT)");
+        assert_eq!(
+            result,
+            Err(MissingKeyword { expected: Token::LP, position: TokenPosition { line: 1, character: 19 } })
+        );
+    }
+
+    #[test]
+    fn test_missing_column_data_type() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users (id, name TEXT)");
+        assert_eq!(result, Err(LiteralExpected { position: TokenPosition { line: 1, character: 22 } }));
+    }
+
+    #[test]
+    fn test_trailing_comma() {
+        let parser = Parser {};
+        let result = parser.parse("CREATE TABLE users (id INT,)");
+        assert_eq!(result, Err(LiteralExpected { position: TokenPosition { line: 1, character: 27 } }));
     }
 }
