@@ -181,6 +181,10 @@ impl<'a> Tokenizer<'a> {
         }
         TokenPosition { line, character }
     }
+
+    pub fn get_end_of_input(&self) -> TokenPosition {
+        self.get_position(self.source_text.len())
+    }
 }
 
 #[cfg(test)]
