@@ -19,6 +19,7 @@ pub enum ParsingError<'a> {
 #[derive(Debug, PartialEq)]
 enum Operator {
     Equals,
+    NotEquals,
 }
 
 #[derive(Debug, PartialEq)]
@@ -37,7 +38,7 @@ struct WhereClause<'a> {
 #[derive(Debug, PartialEq)]
 enum Statement<'a> {
     CreateTable { columns: Vec<ColumnDef<'a>>, table: &'a str },
-    Select { columns: Vec<&'a str>, table: &'a str, where_clause: Option<&'a str> },
+    Select { columns: Vec<&'a str>, table: &'a str, where_clause: Option<WhereClause<'a>> },
     Insert { columns: Vec<&'a str>, table: &'a str, values: Vec<&'a str> },
 }
 
@@ -118,7 +119,25 @@ impl Parser {
     }
 
     fn parse_select_statement(mut tokens: Tokenizer) -> Result<Statement, ParsingError> {
-        todo!()
+        let mut columns: Vec<&str> = Vec::new();
+        loop {
+            let Some(TokenWithOffset { token, offset }) = tokens.next() else { return Err(UnexpectedEOF) };
+            match token {
+                Token::Comma => continue,
+                Token::Identifier(column) => columns.push(column),
+                Token::From => break,
+                other => {
+                    return Err(UnexpectedKeywordMany {
+                        expected: vec![Token::From, Token::Comma],
+                        got: other,
+                        position: tokens.get_position(offset),
+                    })
+                }
+            }
+        }
+        let table = Parser::consume_identifier(&mut tokens)?;
+
+        Ok(Statement::Select { columns, table, where_clause: None })
     }
 
     fn parse_insert_statement(mut tokens: Tokenizer) -> Result<Statement, ParsingError> {
@@ -462,5 +481,12 @@ mod tests {
                 position: TokenPosition { line: 1, character: 31 }
             })
         );
+    }
+
+    #[test]
+    fn test_select() {
+        let parser = Parser {};
+        let result = parser.parse("SELECT id, name FROM users");
+        assert_eq!(result, Ok(Statement::Select { columns: vec!["id", "name"], table: "users", where_clause: None }));
     }
 }
