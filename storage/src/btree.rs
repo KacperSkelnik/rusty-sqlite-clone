@@ -36,6 +36,26 @@ where
     K: Ord + Copy,
     V: Clone,
 {
+    // Use when creating a new database from scratch.
+    pub fn create(mut pager: P, serializer: S, n: usize) -> Result<BTree<P, K, V, S>, BTreeError> {
+        let root_node_id = pager.alloc_page().map_err(BTreeError::from)?;
+        let root_node = BTreeNode::<K, V>::empty_leaf(root_node_id, vec![]);
+        let page = S::serialize_to_page_leaf(&root_node).map_err(BTreeError::from)?;
+        let mut btree = BTree { pager, serializer, root_page_id: 0, n, _marker: PhantomData };
+        btree.insert_page(root_node_id, page)?;
+        Ok(btree)
+    }
+
+    // Use when opening an existing database. root_page_id must be persisted and restored by the caller.
+    pub fn initialize(
+        pager: P,
+        serializer: S,
+        n: usize,
+        root_page_id: PageId,
+    ) -> Result<BTree<P, K, V, S>, BTreeError> {
+        Ok(BTree { pager, serializer, root_page_id, n, _marker: PhantomData })
+    }
+
     pub fn store(&mut self, key: K, value: V) -> Result<(), BTreeError> {
         let mut leaf = self.find_leaf(key)?;
         if leaf.keys.len() >= self.n - 1 {
@@ -158,7 +178,7 @@ where
                 _ => return Err(BTreeError::TheTreeIsCorrupted),
             };
         } else {
-            todo!()
+            self.split_root(key_to_promote, right_page_id)?;
         }
 
         Ok(())
@@ -225,10 +245,22 @@ where
                     _ => return Err(BTreeError::TheTreeIsCorrupted),
                 };
             } else {
-                todo!()
+                self.split_root(key_to_promote, right_page_id)?;
             }
         }
 
+        Ok(())
+    }
+
+    fn split_root(&mut self, key_to_promote: K, right_page_id: PageId) -> Result<(), BTreeError> {
+        // alloc a new page for the new root
+        let new_root_page_id = self.pager.alloc_page().map_err(BTreeError::from)?;
+        let mut new_root_node = BTreeNode::<K, V>::empty_internal(new_root_page_id, vec![]);
+        new_root_node.keys = vec![key_to_promote];
+        new_root_node.children = vec![self.root_page_id, right_page_id];
+        let page = S::serialize_to_page_internal(&new_root_node).map_err(BTreeError::from)?;
+        self.insert_page(new_root_page_id, page)?;
+        self.root_page_id = new_root_page_id;
         Ok(())
     }
 }
