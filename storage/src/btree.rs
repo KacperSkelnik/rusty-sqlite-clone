@@ -78,8 +78,29 @@ where
     }
 
     pub fn delete(&mut self, key: K) -> Result<(), BTreeError> {
-        let leaf = self.find_leaf(key)?;
-        todo!()
+        let mut leaf = self.find_leaf(key)?;
+        let mut index_to_remove = -1;
+        for (i, &k) in leaf.keys.iter().enumerate() {
+            if k > key {
+                break;
+            }
+            if k == key {
+                index_to_remove = i as i32;
+                break;
+            }
+        }
+        if index_to_remove >= 0 {
+            leaf.keys.remove(index_to_remove as usize);
+            leaf.values.remove(index_to_remove as usize);
+            return if leaf.keys.len() >= self.min_keys_per_node() {
+                let leaf_page = S::serialize_to_page_leaf(&leaf).map_err(BTreeError::from)?;
+                self.pager.write_page(leaf.page_id, &leaf_page).map_err(BTreeError::from)?;
+                Ok(())
+            } else {
+                self.rebalance_leaf(key, leaf)
+            };
+        }
+        Err(BTreeError::KeyNotFound)
     }
 
     fn find_leaf(&self, key: K) -> Result<LeafNode<K, V>, BTreeError> {
@@ -262,5 +283,140 @@ where
         self.insert_page(new_root_page_id, page)?;
         self.root_page_id = new_root_page_id;
         Ok(())
+    }
+
+    fn min_keys_per_node(&self) -> usize {
+        // minimum keys constraint: (⌈N/2⌉ - 1) keys per node
+        self.n.div_ceil(2) - 1
+    }
+
+    fn rebalance_leaf(&mut self, deleted_key: K, unbalanced_leaf: LeafNode<K, V>) -> Result<(), BTreeError> {
+        if let Some(parent_page_id) = unbalanced_leaf.parents.last() {
+            let page = self.pager.get_page(*parent_page_id)?;
+            let sub_parents = unbalanced_leaf.parents[..unbalanced_leaf.parents.len() - 1].to_vec();
+            match S::deserialize_to_node(page, &sub_parents)? {
+                BTreeNode::Internal(internal) => {
+                    let unbalance_leaf_index =
+                        internal.keys.iter().position(|&e| e == deleted_key).ok_or(BTreeError::TheTreeIsCorrupted)?;
+
+                    let min_keys = self.min_keys_per_node();
+
+                    // we can borrow from the left sibling
+                    if unbalance_leaf_index > 0 {
+                        if let Some(&left_sibling_page_id) = internal.children.get(unbalance_leaf_index - 1) {
+                            let left_leaf_page = self.pager.get_page(left_sibling_page_id)?;
+                            match S::deserialize_to_node(left_leaf_page, &sub_parents)? {
+                                BTreeNode::Leaf(left_leaf) => {
+                                    if left_leaf.keys.len() > min_keys {
+                                        return self.borrow_from_left_leaf(
+                                            internal,
+                                            left_leaf,
+                                            unbalanced_leaf,
+                                            unbalance_leaf_index - 1,
+                                        );
+                                    }
+                                }
+                                _ => return Err(BTreeError::TheTreeIsCorrupted),
+                            }
+                        }
+                    }
+                    // we can borrow from the right sibling
+                    if unbalance_leaf_index + 1 < internal.children.len() {
+                        if let Some(&right_sibling_page_id) = internal.children.get(unbalance_leaf_index + 1) {
+                            let left_leaf_page = self.pager.get_page(right_sibling_page_id)?;
+                            match S::deserialize_to_node(left_leaf_page, &sub_parents)? {
+                                BTreeNode::Leaf(right_leaf) => {
+                                    if right_leaf.keys.len() > min_keys {
+                                        return self.borrow_from_right_leaf(
+                                            internal,
+                                            right_leaf,
+                                            unbalanced_leaf,
+                                            unbalance_leaf_index + 1,
+                                        );
+                                    }
+                                }
+                                _ => return Err(BTreeError::TheTreeIsCorrupted),
+                            }
+                        }
+                    }
+                    // we must merge with sibling on the left
+                    if let Some(&left_sibling_key) = internal.keys.get(unbalance_leaf_index - 1) {
+                        todo!()
+                    }
+                    // we must merge with sibling on the right
+                    if let Some(&right_sibling_key) = internal.keys.get(unbalance_leaf_index + 1) {
+                        todo!()
+                    }
+                }
+                _ => return Err(BTreeError::TheTreeIsCorrupted),
+            };
+        }
+        todo!()
+    }
+
+    fn borrow_from_left_leaf(
+        &mut self,
+        mut parent: InternalNode<K>,
+        mut left_sibling_leaf: LeafNode<K, V>,
+        mut unbalanced_leaf: LeafNode<K, V>,
+        left_key_index: usize,
+    ) -> Result<(), BTreeError> {
+        // take element from the left sibling
+        let key_to_borrow = left_sibling_leaf.keys.pop().ok_or(BTreeError::TheTreeIsCorrupted)?;
+        let value_to_borrow = left_sibling_leaf.values.pop().ok_or(BTreeError::TheTreeIsCorrupted)?;
+
+        // insert borrowed element to the unbalanced leaf
+        unbalanced_leaf.keys.insert(0, key_to_borrow);
+        unbalanced_leaf.values.insert(0, value_to_borrow);
+
+        // update parent
+        parent.keys[left_key_index] = unbalanced_leaf.keys[0];
+
+        // store updated versions
+        let page = S::serialize_to_page_internal(&parent).map_err(BTreeError::from)?;
+        self.insert_page(parent.page_id, page)?;
+
+        let page = S::serialize_to_page_leaf(&left_sibling_leaf).map_err(BTreeError::from)?;
+        self.insert_page(left_sibling_leaf.page_id, page)?;
+
+        let page = S::serialize_to_page_leaf(&unbalanced_leaf).map_err(BTreeError::from)?;
+        self.insert_page(unbalanced_leaf.page_id, page)
+    }
+
+    fn borrow_from_right_leaf(
+        &mut self,
+        mut parent: InternalNode<K>,
+        mut right_sibling_leaf: LeafNode<K, V>,
+        mut unbalanced_leaf: LeafNode<K, V>,
+        right_key_index: usize,
+    ) -> Result<(), BTreeError> {
+        // take element from the right sibling
+        let key_to_borrow = right_sibling_leaf.keys.remove(0);
+        let value_to_borrow = right_sibling_leaf.values.remove(0);
+
+        // insert borrowed element to the unbalanced leaf
+        unbalanced_leaf.keys.push(key_to_borrow);
+        unbalanced_leaf.values.push(value_to_borrow);
+
+        // update parent
+        parent.keys[right_key_index] = *unbalanced_leaf.keys.last().ok_or(BTreeError::TheTreeIsCorrupted)?;
+
+        // store updated versions
+        let page = S::serialize_to_page_internal(&parent).map_err(BTreeError::from)?;
+        self.insert_page(parent.page_id, page)?;
+
+        let page = S::serialize_to_page_leaf(&right_sibling_leaf).map_err(BTreeError::from)?;
+        self.insert_page(right_sibling_leaf.page_id, page)?;
+
+        let page = S::serialize_to_page_leaf(&unbalanced_leaf).map_err(BTreeError::from)?;
+        self.insert_page(unbalanced_leaf.page_id, page)
+    }
+
+    fn merge_with_left_leaf(
+        &mut self,
+        mut parent: InternalNode<K>,
+        mut left_sibling_leaf: LeafNode<K, V>,
+        mut unbalanced_leaf: LeafNode<K, V>,
+    ) {
     }
 }
